@@ -9,6 +9,7 @@ import (
 	"github.com/erdincmutlu/url-shortener/api/database"
 	"github.com/erdincmutlu/url-shortener/api/helpers"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -77,6 +78,38 @@ func ShortenURL(c fiber.Ctx) error {
 	// enforce https
 	// all url will be converted to https before storing in database
 	body.URL = helpers.EnforceHTTP(body.URL)
+
+	// check if the user has provided any custom dhort urls
+	// if yes, proceed,
+	// else, create a new short using the first 6 digits of uuid
+	var id string
+
+	if body.CustomShort == "" {
+		id = uuid.New().String()[:6]
+	} else {
+		id = body.CustomShort
+	}
+
+	r := database.CreateClient(0)
+	defer r.Close()
+
+	value, _ = r.Get(database.Ctx, id).Result()
+	if value != "" {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "URL custom short is already in use",
+		})
+	}
+
+	if body.Expiry == 0 {
+		body.Expiry = 24
+	}
+
+	err = r.Set(database.Ctx, id, body.URL, body.Expiry*time.Hour).Err()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Unable to connect to server",
+		})
+	}
 
 	r2.Decr(database.Ctx, c.IP())
 }
