@@ -1,11 +1,15 @@
 package routes
 
 import (
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/asaskevich/govalidator"
+	"github.com/erdincmutlu/url-shortener/api/database"
 	"github.com/erdincmutlu/url-shortener/api/helpers"
 	"github.com/gofiber/fiber/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 type request struct {
@@ -33,10 +37,26 @@ func ShortenURL(c fiber.Ctx) error {
 	}
 
 	// Implement rate limiting
-	// everytime a user queries, check if the IP is already in database,
+	// Everytime a user queries, check if the IP is already in database,
 	// if yes, decrement the calls remaining by one, else add the IP to database
 	// with expiry of `30mins`. So in this case the user will be able to send 10
 	// requests every 30 minutes
+	r2 := database.CreateClient(1)
+	defer r2.Close()
+
+	value, err := r2.Get(database.Ctx, c.IP()).Result()
+	if err == redis.Nil {
+		_ = r2.Set(database.Ctx, c.IP(), os.Getenv("API_QUOTA"), 30*60*time.Second).Err()
+	} else {
+		valInt, _ := strconv.Atoi(value)
+		if valInt <= 0 {
+			limit, _ := r2.TTL(database.Ctx, c.IP()).Result()
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"error":            "Rate limit exceeded",
+				"rate_limit_reset": limit / time.Nanosecond / time.Minute,
+			})
+		}
+	}
 
 	// check if the input is an actual URL
 	if !govalidator.IsURL(body.URL) {
@@ -56,6 +76,7 @@ func ShortenURL(c fiber.Ctx) error {
 
 	// enforce https
 	// all url will be converted to https before storing in database
-	body.URL = helpers.EnforceHTTPS(body.URL)
+	body.URL = helpers.EnforceHTTP(body.URL)
 
+	r2.Decr(database.Ctx, c.IP())
 }
