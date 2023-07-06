@@ -27,7 +27,7 @@ type response struct {
 	XRateLimitReset time.Duration `json:"rate_limit_reset"`
 }
 
-func ShortenURL(c fiber.Ctx) error {
+func ShortenURL(c *fiber.Ctx) error {
 	body := new(request)
 
 	err := c.BodyParser(&body)
@@ -111,5 +111,23 @@ func ShortenURL(c fiber.Ctx) error {
 		})
 	}
 
+	// respond with the url, short, expiry in hours, calls remaining and time to reset
+	resp := response{
+		URL:             body.URL,
+		CustomShort:     "",
+		Expiry:          body.Expiry,
+		XRateRemaining:  10,
+		XRateLimitReset: 30,
+	}
+
 	r2.Decr(database.Ctx, c.IP())
+
+	value, _ = r2.Get(database.Ctx, c.IP()).Result()
+	resp.XRateRemaining, _ = strconv.Atoi(value)
+	ttl, _ := r2.TTL(database.Ctx, c.IP()).Result()
+	resp.XRateLimitReset = ttl / time.Nanosecond / time.Minute
+
+	resp.CustomShort = os.Getenv("DOMAIN") + "/" + id
+
+	return c.Status(fiber.StatusOK).JSON(resp)
 }
